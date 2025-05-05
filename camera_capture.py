@@ -9,7 +9,7 @@ import base64
 import requests
 
 # Configuration
-OPENAI_API_KEY = "YOUR_OPEN_API_KEY_HERE"
+OPENAI_API_KEY = "YOUR_OPENAI_API_KEY_HERE"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"} # permissible image file exptensions
 OUTPUT_FILE = "video_analysis.txt" # final output file name
 MAX_IMAGES_PER_REQUEST = 10 # maximum images processed by gpt-4o per request
