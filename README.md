@@ -51,8 +51,7 @@ pip install opencv-python requests
 ## Setup
 
 1. Open the Python script (`camera_capture.py`).
-2. Replace the placeholder API key with your OpenAI API key:
-  OPENAI_API_KEY = "YOUR_OPENAI_API_KEY_HERE"
+2. Replace the placeholder API key with your OpenAI API key: `OPENAI_API_KEY = "YOUR_OPENAI_API_KEY_HERE"`
 
 ---
 
