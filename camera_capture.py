@@ -97,7 +97,8 @@ def get_final_description(batch_descriptions):
 			1. "What was the activity that the participant of the study was performing; what did they do?"
 			2. "What items and components were used in that activity?"
 			3. "What were the results of the activity?".
-   		Avoid storytelling, or unnecessary commentary, use human-like language with detailed description of the activity, components used, and results."""
+   		Avoid storytelling, or unnecessary commentary, use human-like language with detailed description of the activity, components used, and results.
+     		Use second-person language and it doesn't have to be complete sentences."""
         )
     }]
 
@@ -130,17 +131,25 @@ class WebcamApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Video Analyzer")
-        
-        # GUI Elements
-        self.control_btn = ttk.Button(root, text="Start", command=self.toggle_capture)
+
+        # Username input
+        self.username_label = ttk.Label(root, text="Enter Username:")
+        self.username_label.pack(pady=5)
+
+        self.username_var = tk.StringVar()
+        self.username_entry = ttk.Entry(root, textvariable=self.username_var, width=20)
+        self.username_entry.pack(pady=5)
+        self.username_var.trace_add('write', self.validate_username)
+
+        self.control_btn = ttk.Button(root, text="Start", command=self.toggle_capture, state='disabled')
         self.control_btn.pack(pady=10)
-        
+
         self.timer_label = ttk.Label(root, text="00:00", font=('Helvetica', 24))
         self.timer_label.pack(pady=5)
-        
+
         self.status = ttk.Label(root, text="Ready")
         self.status.pack(pady=10)
-        
+
         # Capture control
         self.is_capturing = False
         self.capture_thread = None
@@ -150,6 +159,13 @@ class WebcamApp:
         self.timer_id = None
         self.start_time = None
 
+    def validate_username(self, *args):
+        """Enable Start button only if username is entered"""
+        if self.username_var.get().strip():
+            self.control_btn.config(state='normal')
+        else:
+            self.control_btn.config(state='disabled')
+
     def toggle_capture(self):
         if not self.is_capturing:
             self.start_capture()
@@ -157,30 +173,34 @@ class WebcamApp:
             self.stop_capture()
 
     def start_capture(self):
+        # Lock the username field
+        self.username_entry.config(state='disabled')
         self.is_capturing = True
         self.control_btn.config(text="Stop")
         self.status.config(text="Capturing...")
         self.img_counter = 0
         self.start_time = time.time()
         self.update_timer()  # Start the timer
-        
+
         # Initialize webcam in separate thread
         self.capture_thread = threading.Thread(target=self.run_capture_loop, daemon=True)
         self.capture_thread.start()
 
     def stop_capture(self):
+        # Unlock the username field
+        self.username_entry.config(state='normal')
         self.is_capturing = False
         self.control_btn.config(text="Start")
         self.status.config(text="Processing images...")
-        
+
         # Stop the timer
         if self.timer_id:
             self.root.after_cancel(self.timer_id)
             self.timer_id = None
-        
+
         if self.cap and self.cap.isOpened():
             self.cap.release()
-        
+
         # Start processing in separate thread
         self.processing_thread = threading.Thread(target=self.process_captured_images, daemon=True)
         self.processing_thread.start()
@@ -198,7 +218,7 @@ class WebcamApp:
             self.cap = cv2.VideoCapture(0)
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
-            
+
             if not self.cap.isOpened():
                 messagebox.showerror("Error", "Could not open webcam")
                 self.is_capturing = False
@@ -231,6 +251,8 @@ class WebcamApp:
             images = get_sorted_images(output_dir)
             if not images:
                 messagebox.showinfo("Info", "No images captured")
+                self.status.config(text="Ready")
+                self.username_entry.config(state='normal')
                 return
 
             batch_descriptions = []
@@ -238,7 +260,7 @@ class WebcamApp:
                 batch_images = images[i:i+MAX_IMAGES_PER_REQUEST]
                 encoded_batch = [encode_image(os.path.join(output_dir, img)) for img in batch_images]
                 description = get_batch_description(encoded_batch)
-                
+
                 if not description.startswith("Error"):
                     batch_descriptions.append(description)
 
@@ -247,15 +269,50 @@ class WebcamApp:
                 with open(OUTPUT_FILE, "w") as f:
                     f.write("COMPREHENSIVE VIDEO ANALYSIS\n\n")
                     f.write(final_analysis)
+
                 messagebox.showinfo("Success", f"Analysis saved to {OUTPUT_FILE}")
                 self.status.config(text="Analysis complete")
+
+                # Extract answers using regex
+                matches = re.findall(
+                    r"\d+\. \*\*(.*?)\*\*\s*(.*?)(?=\n\d+\. \*\*|$)",
+                    final_analysis,
+                    re.DOTALL
+                )
+                activity = matches[0][1].strip() if len(matches) > 0 else ""
+                tools = matches[1][1].strip() if len(matches) > 1 else ""
+                results = matches[2][1].strip() if len(matches) > 2 else ""
+                username = self.username_var.get().strip()
+
+                # JSON for post request.
+                data = {
+                    "user": {
+                        "username": username  # Use entered username
+                    },
+                    "reflection": {
+                        "entryId": -1,
+                        "project": "My Maker Project",
+                        "content": [
+                            {"fieldName": "Activities", "content": activity},
+                            {"fieldName": "Use", "content": tools},
+                            {"fieldName": "Results", "content": results}
+                        ]
+                    }
+                }
+
+                # Send post request to the CT server that handles DB access.
+                requests.post("http://157.230.225.94:3000/api/user/ccr", json=data)
+		# DNS address instead of IP address
+		# requests.post(" http://knowledgetracker.duckdns.org:3000/api/user/ccr", json=data)
             else:
                 messagebox.showwarning("Warning", "No valid descriptions generated")
                 self.status.config(text="Processing failed")
+            self.username_entry.config(state='normal')
 
         except Exception as e:
             messagebox.showerror("Processing Error", str(e))
             self.status.config(text="Processing error")
+            self.username_entry.config(state='normal')
 
 if __name__ == "__main__":
     root = tk.Tk()
