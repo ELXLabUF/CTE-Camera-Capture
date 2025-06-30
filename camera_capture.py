@@ -7,19 +7,23 @@ import cv2
 import os
 import base64
 import requests
+import re
 
 # Configuration
 OPENAI_API_KEY = "YOUR_OPENAI_API_KEY_HERE"
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"} # permissible image file exptensions
-OUTPUT_FILE = "video_analysis.txt" # final output file name
-MAX_IMAGES_PER_REQUEST = 10 # maximum images processed by gpt-4o per request
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 # Capture parameters
-CAPTURE_INTERVAL = 10 # seconds between captures
+CAPTURE_INTERVAL = 10  # seconds between captures
 FRAME_WIDTH = 1920
 FRAME_HEIGHT = 1080
-output_dir = "Captured_Images" # directory path where captured images are stored
-os.makedirs(output_dir, exist_ok=True)
+MAX_IMAGES_PER_REQUEST = 10
+
+def create_user_folder(username):
+    """Create user-specific folder structure"""
+    base_dir = os.path.join(os.getcwd(), username)
+    os.makedirs(base_dir, exist_ok=True)
+    return base_dir
 
 def get_sorted_images(folder_path):
     """Get sorted list of image files by creation time"""
@@ -43,17 +47,26 @@ def get_batch_description(image_batch):
     content = [{
         "type": "text",
         "text": (
-		"""You are a video analysis application. You will receive images that are frames from a camera feed every 10 seconds. The video is capturing a participant in a Maker activity that involves different disciplines.
-		Your task is to analyze the frames as a whole image and give a brief but detailed description of what is happening in the video - provide a clear, concise, and technically accurate summary of the task being performed.
-		Detect what items and components were used. Include results of the activity. Use human-like language that is direct and professional, avoiding robotic or overly formal phrasing.
-		For each set of frames, identify and describe the following:
-			1. The main components visible (e.g., breadboard, LEDs, resistors, jumper wires, Arduino boards).
-			2. The specific actions being taken (e.g., connecting an LED to a digital pin, inserting a resistor, uploading code to Arduino).
-			3. The logical sequence of steps, if discernible, and any technical purpose behind them (e.g., current limiting, circuit testing, prototyping).
-			4. Any potential issues or best practices observed (e.g., correct resistor orientation, secure connections, possible wiring errors).
-			5. The overall objective of the task, if it can be inferred from the frames.
-		Your analysis should be factual, objective, and focused on the technical aspects of the work shown in the frames. Avoid storytelling, or unnecessary commentary.
-		Present your findings as if you are documenting the process for a technical audience or for training purposes."""
+            '''You are a video analysis application.
+            You will receive images that are frames from a camera feed every 10 seconds.
+            The video is capturing a participant in a Maker activity that involves different disciplines.
+            Your task is to analyze the frames as a whole image and give a brief but detailed description 
+            of what is happening in the video and provide a clear, concise, and technically accurate 
+            summary of the task being performed. Detect what items and components were used.
+            Include results of the activity. Use human-like language that is direct and professional, 
+            avoiding robotic or overly formal phrasing.
+            For each set of frames, identify and describe the following:
+            1. The main components visible (e.g., breadboard, LEDs, resistors, jumper wires, Arduino boards).
+            2. The specific actions being taken 
+            (e.g., connecting an LED to a digital pin, inserting a resistor, uploading code to Arduino).
+            3. The logical sequence of steps, if discernible, and any technical purpose behind them 
+            (e.g., current limiting, circuit testing, prototyping).
+            4. Any potential issues or best practices observed 
+            (e.g., correct resistor orientation, secure connections, possible wiring errors).
+            5. The overall objective of the task, if it can be inferred from the frames.
+            Your analysis should be factual, objective, and focused on the technical aspects
+            of the work shown in the frames. Avoid storytelling, or unnecessary commentary.
+            Present your findings as if you are documenting the process for a technical audience or for training purposes.'''
         )
     }]
 
@@ -92,13 +105,16 @@ def get_final_description(batch_descriptions):
     content = [{
         "type": "text",
         "text": (
-		"""You are a tool that synthesizes a batch of video analysis descriptions. You will receive multiple descriptions of frames taken from a camera that is recording a Maker activity.
-		Your task is to synthesize all the descriptions and create an output consisting of answers to the three questions:
-			1. "What was the activity that the participant of the study was performing; what did they do?"
-			2. "What items and components were used in that activity?"
-			3. "What were the results of the activity?".
-   		Avoid storytelling, or unnecessary commentary, use human-like language with detailed description of the activity, components used, and results.
-     		Use second-person language and it doesn't have to be complete sentences."""
+            '''You are a tool that synthesizes a batch of video analysis descriptions.
+            You will receive multiple descriptions of frames taken from a camera capture recording a Maker activity.
+            Your task is to synthesize all the descriptions and create an output consisting of answers to the three 
+            questions:
+            1. "What was the activity that the participant of the study was performing; what did they do?"
+            2. "What items and components were used in that activity?"
+            3. "What were the results of the activity?".
+            Avoid storytelling, use human-like language with detailed description of the activity, 
+            components used, and results.
+            Use second-person language and it doesn\'t have to be complete sentences.'''
         )
     }]
 
@@ -159,6 +175,11 @@ class WebcamApp:
         self.timer_id = None
         self.start_time = None
 
+        # User folder and paths
+        self.user_folder = None
+        self.output_dir = None
+        self.output_file = None
+
     def validate_username(self, *args):
         """Enable Start button only if username is entered"""
         if self.username_var.get().strip():
@@ -173,16 +194,19 @@ class WebcamApp:
             self.stop_capture()
 
     def start_capture(self):
-        # Lock the username field
+        username = self.username_var.get().strip()
+        self.user_folder = create_user_folder(username)
+        self.output_dir = os.path.join(self.user_folder, "Captured_Images")
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.output_file = os.path.join(self.user_folder, "video_analysis.txt")
+
         self.username_entry.config(state='disabled')
         self.is_capturing = True
         self.control_btn.config(text="Stop")
         self.status.config(text="Capturing...")
         self.img_counter = 0
         self.start_time = time.time()
-        self.update_timer()  # Start the timer
-
-        # Initialize webcam in separate thread
+        self.update_timer()
         self.capture_thread = threading.Thread(target=self.run_capture_loop, daemon=True)
         self.capture_thread.start()
 
@@ -192,15 +216,15 @@ class WebcamApp:
         self.is_capturing = False
         self.control_btn.config(text="Start")
         self.status.config(text="Processing images...")
-
+        
         # Stop the timer
         if self.timer_id:
             self.root.after_cancel(self.timer_id)
             self.timer_id = None
-
+        
         if self.cap and self.cap.isOpened():
             self.cap.release()
-
+        
         # Start processing in separate thread
         self.processing_thread = threading.Thread(target=self.process_captured_images, daemon=True)
         self.processing_thread.start()
@@ -215,10 +239,11 @@ class WebcamApp:
 
     def run_capture_loop(self):
         try:
-            self.cap = cv2.VideoCapture(0)
+	    # Change the value to 0 to use built-in camera; 1 to use external camera 
+            self.cap = cv2.VideoCapture(1)
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
-
+            
             if not self.cap.isOpened():
                 messagebox.showerror("Error", "Could not open webcam")
                 self.is_capturing = False
@@ -229,7 +254,8 @@ class WebcamApp:
                 if not ret:
                     break
 
-                img_name = os.path.join(output_dir, f"image_{self.img_counter:03d}.jpg")
+                img_name = os.path.join(self.output_dir, f"image_{self.img_counter:03d}.jpg")
+
                 cv2.imwrite(img_name, frame)
                 self.img_counter += 1
 
@@ -248,7 +274,8 @@ class WebcamApp:
 
     def process_captured_images(self):
         try:
-            images = get_sorted_images(output_dir)
+            images = get_sorted_images(self.output_dir)
+
             if not images:
                 messagebox.showinfo("Info", "No images captured")
                 self.status.config(text="Ready")
@@ -258,19 +285,19 @@ class WebcamApp:
             batch_descriptions = []
             for i in range(0, len(images), MAX_IMAGES_PER_REQUEST):
                 batch_images = images[i:i+MAX_IMAGES_PER_REQUEST]
-                encoded_batch = [encode_image(os.path.join(output_dir, img)) for img in batch_images]
+                encoded_batch = [encode_image(os.path.join(self.output_dir, img)) for img in batch_images]
                 description = get_batch_description(encoded_batch)
-
+                
                 if not description.startswith("Error"):
                     batch_descriptions.append(description)
 
             if batch_descriptions:
                 final_analysis = get_final_description(batch_descriptions)
-                with open(OUTPUT_FILE, "w") as f:
+                with open(self.output_file, "w") as f:
                     f.write("COMPREHENSIVE VIDEO ANALYSIS\n\n")
                     f.write(final_analysis)
-
-                messagebox.showinfo("Success", f"Analysis saved to {OUTPUT_FILE}")
+                
+                messagebox.showinfo("Success", f"Analysis saved to {self.output_file}")
                 self.status.config(text="Analysis complete")
 
                 # Extract answers using regex
@@ -283,8 +310,8 @@ class WebcamApp:
                 tools = matches[1][1].strip() if len(matches) > 1 else ""
                 results = matches[2][1].strip() if len(matches) > 2 else ""
                 username = self.username_var.get().strip()
-
-                # JSON for post request.
+                
+                # Body JSON for post request.
                 data = {
                     "user": {
                         "username": username  # Use entered username
@@ -299,16 +326,15 @@ class WebcamApp:
                         ]
                     }
                 }
-
+                
                 # Send post request to the CT server that handles DB access.
-                requests.post("http://157.230.225.94:3000/api/user/ccr", json=data)
-		# DNS address instead of IP address
-		# requests.post(" http://knowledgetracker.duckdns.org:3000/api/user/ccr", json=data)
+                # requests.post("http://157.230.225.94:8081/api/user/ccr", json=data)
+                requests.post("http://knowledgetracker.duckdns.org:8081/api/user/ccr", json=data)
             else:
                 messagebox.showwarning("Warning", "No valid descriptions generated")
                 self.status.config(text="Processing failed")
             self.username_entry.config(state='normal')
-
+        
         except Exception as e:
             messagebox.showerror("Processing Error", str(e))
             self.status.config(text="Processing error")
